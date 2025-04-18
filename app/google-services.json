@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "973551958629",
+    "project_id": "blushbistroapp",
+    "storage_bucket": "blushbistroapp.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:973551958629:android:a86399de3b1d08f02ea48c",
+        "android_client_info": {
+          "package_name": "com.example.blushbistroapp"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC1sVJoaNN4kaXxgxNvhnOx1j33ccxtCWo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
