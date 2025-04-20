@@ -55,8 +55,6 @@ import com.example.blushbistroapp.ui.screens.SettingsScreen
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.async
 import com.google.firebase.firestore.FirebaseFirestore
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 
 enum class DashboardTab {
     HOME, FAVORITES, PROFILE, SETTINGS
@@ -145,7 +143,6 @@ fun DashboardScreen(
     // Function to load recipes
     fun loadRecipes() {
         scope.launch {
-            if (isLoading) return@launch // Prevent multiple simultaneous loads
             isLoading = true
             error = null
             try {
@@ -156,104 +153,32 @@ fun DashboardScreen(
                     return@launch
                 }
                 
-                // Load recipes and favorites in parallel
-                val recipesJob = scope.async<List<Recipe>> {
-                    withContext(Dispatchers.IO) {
-                        try {
-                            // First, ensure predefined recipes are initialized
-                            val initializationResult = firestoreService.initializePredefinedRecipes()
-                            if (initializationResult.isSuccess) {
-                                // Then load all recipes (both predefined and user's)
-                                val predefinedRecipes = mutableListOf<Recipe>()
-                                try {
-                                    firestoreService.getRecipes("predefined").collect { result ->
-                                        result.onSuccess { recipes: List<Recipe> ->
-                                            predefinedRecipes.addAll(recipes.mapNotNull { recipe ->
-                                                try {
-                                                    recipe.copy(id = recipe.id)
-                                                } catch (e: Exception) {
-                                                    Log.e("DashboardScreen", "Error converting predefined recipe: ${e.message}")
-                                                    null
-                                                }
-                                            })
-                                        }
-                                    }
-                                } catch (e: Exception) {
-                                    Log.e("DashboardScreen", "Error getting predefined recipes: ${e.message}")
-                                }
-                                
-                                val userRecipes = mutableListOf<Recipe>()
-                                if (currentUser.uid != null) {
-                                    try {
-                                        firestoreService.getRecipes(currentUser.uid).collect { result ->
-                                            result.onSuccess { recipes: List<Recipe> ->
-                                                userRecipes.addAll(recipes.mapNotNull { recipe ->
-                                                    try {
-                                                        recipe.copy(id = recipe.id)
-                                                    } catch (e: Exception) {
-                                                        Log.e("DashboardScreen", "Error converting user recipe: ${e.message}")
-                                                        null
-                                                    }
-                                                })
-                                            }
-                                        }
-                                    } catch (e: Exception) {
-                                        Log.e("DashboardScreen", "Error getting user recipes: ${e.message}")
-                                    }
-                                }
-                                
-                                // Combine and deduplicate recipes
-                                val allRecipes = mutableListOf<Recipe>()
-                                val seenNames = mutableSetOf<String>()
-                                
-                                predefinedRecipes.forEach { recipe: Recipe ->
-                                    if (!seenNames.contains(recipe.name)) {
-                                        seenNames.add(recipe.name)
-                                        allRecipes.add(recipe)
-                                    }
-                                }
-                                
-                                userRecipes.forEach { recipe: Recipe ->
-                                    if (!seenNames.contains(recipe.name)) {
-                                        seenNames.add(recipe.name)
-                                        allRecipes.add(recipe)
-                                    }
-                                }
-                                
-                                allRecipes
-                            } else {
-                                emptyList()
+                // Initialize predefined recipes first
+                firestoreService.initializePredefinedRecipes().onSuccess {
+                // Load recipes in a coroutine
+                val recipesDeferred = scope.async {
+                    firestoreService.getRecipesForCurrentUser()
+                }
+                
+                // Load favorites in a separate coroutine
+                currentUser.uid?.let { userId ->
+                    scope.launch {
+                        firestoreService.getUserFavorites(userId).collect { result ->
+                            result.onSuccess { favorites ->
+                                userFavorites = favorites
+                            }.onFailure { exception ->
+                                error = exception.message ?: "Failed to load favorites"
                             }
-                        } catch (e: Exception) {
-                            Log.e("DashboardScreen", "Error loading recipes: ${e.message}")
-                            emptyList()
                         }
                     }
                 }
                 
-                val favoritesJob = scope.async<Unit> {
-                    withContext(Dispatchers.IO) {
-                        try {
-                            currentUser.uid?.let { userId ->
-                                try {
-                                    firestoreService.getUserFavorites(userId).collect { result ->
-                                        result.onSuccess { favorites: List<String> ->
-                                            userFavorites = favorites
-                                        }
-                                    }
-                                } catch (e: Exception) {
-                                    Log.e("DashboardScreen", "Error getting favorites: ${e.message}")
-                                }
-                            }
-                        } catch (e: Exception) {
-                            Log.e("DashboardScreen", "Error loading favorites: ${e.message}")
-                        }
-                    }
-                }
+                // Wait for recipes to complete
+                recipes = recipesDeferred.await()
                 
-                // Wait for both jobs to complete
-                recipes = recipesJob.await()
-                favoritesJob.await()
+                }.onFailure { exception ->
+                    error = "Failed to initialize predefined recipes: ${exception.message}"
+                }
                 
             } catch (e: Exception) {
                 error = "Failed to load recipes: ${e.message}"
@@ -266,9 +191,7 @@ fun DashboardScreen(
     // Load recipes when the screen is first displayed
     LaunchedEffect(Unit) {
         visible = true
-        if (currentUser != null) {
-            loadRecipes()
-        }
+        loadRecipes()
     }
     
     // Only reload recipes when the user changes, not on every recomposition
@@ -289,7 +212,6 @@ fun DashboardScreen(
                 color = MaterialTheme.colorScheme.primary
             )
         }
-        return
     }
     
     // Show error message if there's an error
@@ -748,15 +670,12 @@ fun DashboardScreen(
                                                                 firestoreService.saveUserFeedback(
                                                                     currentUser.uid,
                                                                     feedbackText
-                                                                ).onSuccess {
-                                                                    feedbackText = ""
-                                                                    error = "Thank you for your feedback!"
-                                                                    // Clear the success message after 3 seconds
-                                                                    kotlinx.coroutines.delay(3000)
-                                                                    error = null
-                                                                }.onFailure { exception ->
-                                                                    error = "Failed to submit feedback: ${exception.message}"
-                                                                }
+                                                                )
+                                                                feedbackText = ""
+                                                                error = "Thank you for your feedback!"
+                                                                // Clear the success message after 3 seconds
+                                                                kotlinx.coroutines.delay(3000)
+                                                                error = null
                                                             } catch (e: Exception) {
                                                                 error = "Failed to submit feedback: ${e.message}"
                                                             }
