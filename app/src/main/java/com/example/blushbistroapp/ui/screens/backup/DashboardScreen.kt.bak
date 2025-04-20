@@ -1,8 +1,5 @@
 package com.example.blushbistroapp.ui.screens
 
-import android.content.Context
-import android.content.Intent
-import android.net.Uri
 import android.util.Log
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
@@ -15,10 +12,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -46,7 +39,6 @@ import com.example.blushbistroapp.data.FirestoreService
 import com.example.blushbistroapp.data.Recipe
 import com.example.blushbistroapp.data.RecipeCategory
 import com.example.blushbistroapp.data.FirebaseAuthService
-import com.example.blushbistroapp.data.SettingsService
 import com.example.blushbistroapp.ui.components.ThemeToggle
 import com.example.blushbistroapp.ui.components.UserProfileDialog
 import com.example.blushbistroapp.ui.components.AddRecipeDialog
@@ -54,9 +46,7 @@ import com.example.blushbistroapp.ui.components.RecipeCard
 import com.example.blushbistroapp.ui.screens.SettingsScreen
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.async
-import com.google.firebase.firestore.FirebaseFirestore
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.coroutineScope
 
 enum class DashboardTab {
     HOME, FAVORITES, PROFILE, SETTINGS
@@ -81,17 +71,13 @@ fun DashboardScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val firestoreService = remember { FirestoreService.getInstance(FirebaseFirestore.getInstance()) }
+    val firestoreService = remember { FirestoreService.getInstance(context) }
     val authService = remember { FirebaseAuthService.getInstance(context) }
-    val settingsService = remember { SettingsService.getInstance(context) }
     
     var recipes by remember { mutableStateOf<List<Recipe>>(emptyList()) }
     var userFavorites by remember { mutableStateOf<List<String>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
-    var isDarkMode by remember { mutableStateOf(false) }
-    var notificationsEnabled by remember { mutableStateOf(false) }
-    var feedbackText by remember { mutableStateOf("") }
     
     val currentUser = authService.getCurrentUser()
     
@@ -102,16 +88,6 @@ fun DashboardScreen(
     var showAddRecipeDialog by remember { mutableStateOf(false) }
     var selectedTab by remember { mutableStateOf(DashboardTab.HOME) }
     var showRecipeDetails by remember { mutableStateOf<Recipe?>(null) }
-
-    // Load settings when the screen is first displayed
-    LaunchedEffect(Unit) {
-        try {
-            isDarkMode = settingsService.getThemePreference()
-            notificationsEnabled = settingsService.getNotificationPreference()
-        } catch (e: Exception) {
-            error = "Failed to load settings: ${e.message}"
-        }
-    }
     
     // Function to update favorites
     fun updateFavorites(recipeId: String, isFavorite: Boolean) {
@@ -129,8 +105,7 @@ fun DashboardScreen(
                     userFavorites = updatedFavorites
                     
                     // Show success message
-                    error =
-                        if (isFavorite) "Recipe added to favorites" else "Recipe removed from favorites"
+                    error = if (isFavorite) "Recipe added to favorites" else "Recipe removed from favorites"
                     
                     // Clear the message after 2 seconds
                     kotlinx.coroutines.delay(2000)
@@ -145,7 +120,6 @@ fun DashboardScreen(
     // Function to load recipes
     fun loadRecipes() {
         scope.launch {
-            if (isLoading) return@launch // Prevent multiple simultaneous loads
             isLoading = true
             error = null
             try {
@@ -157,103 +131,33 @@ fun DashboardScreen(
                 }
                 
                 // Load recipes and favorites in parallel
-                val recipesJob = scope.async<List<Recipe>> {
-                    withContext(Dispatchers.IO) {
-                        try {
-                            // First, ensure predefined recipes are initialized
-                            val initializationResult = firestoreService.initializePredefinedRecipes()
-                            if (initializationResult.isSuccess) {
-                                // Then load all recipes (both predefined and user's)
-                                val predefinedRecipes = mutableListOf<Recipe>()
-                                try {
-                                    firestoreService.getRecipes("predefined").collect { result ->
-                                        result.onSuccess { recipes: List<Recipe> ->
-                                            predefinedRecipes.addAll(recipes.mapNotNull { recipe ->
-                                                try {
-                                                    recipe.copy(id = recipe.id)
-                                                } catch (e: Exception) {
-                                                    Log.e("DashboardScreen", "Error converting predefined recipe: ${e.message}")
-                                                    null
-                                                }
-                                            })
-                                        }
-                                    }
-                                } catch (e: Exception) {
-                                    Log.e("DashboardScreen", "Error getting predefined recipes: ${e.message}")
-                                }
-                                
-                                val userRecipes = mutableListOf<Recipe>()
-                                if (currentUser.uid != null) {
-                                    try {
-                                        firestoreService.getRecipes(currentUser.uid).collect { result ->
-                                            result.onSuccess { recipes: List<Recipe> ->
-                                                userRecipes.addAll(recipes.mapNotNull { recipe ->
-                                                    try {
-                                                        recipe.copy(id = recipe.id)
-                                                    } catch (e: Exception) {
-                                                        Log.e("DashboardScreen", "Error converting user recipe: ${e.message}")
-                                                        null
-                                                    }
-                                                })
-                                            }
-                                        }
-                                    } catch (e: Exception) {
-                                        Log.e("DashboardScreen", "Error getting user recipes: ${e.message}")
-                                    }
-                                }
-                                
-                                // Combine and deduplicate recipes
-                                val allRecipes = mutableListOf<Recipe>()
-                                val seenNames = mutableSetOf<String>()
-                                
-                                predefinedRecipes.forEach { recipe: Recipe ->
-                                    if (!seenNames.contains(recipe.name)) {
-                                        seenNames.add(recipe.name)
-                                        allRecipes.add(recipe)
-                                    }
-                                }
-                                
-                                userRecipes.forEach { recipe: Recipe ->
-                                    if (!seenNames.contains(recipe.name)) {
-                                        seenNames.add(recipe.name)
-                                        allRecipes.add(recipe)
-                                    }
-                                }
-                                
-                                allRecipes
-                            } else {
-                                emptyList()
+                val recipesDeferred = coroutineScope {
+                    async {
+                        firestoreService.getRecipesForCurrentUser()
+                    }
+                }
+                
+                val favoritesDeferred = coroutineScope {
+                    async {
+                        firestoreService.getUserFavorites(currentUser.uid).collect { result ->
+                            result.onSuccess { favorites ->
+                                userFavorites = favorites
+                            }.onFailure { exception ->
+                                error = exception.message ?: "Failed to load favorites"
                             }
-                        } catch (e: Exception) {
-                            Log.e("DashboardScreen", "Error loading recipes: ${e.message}")
-                            emptyList()
                         }
                     }
                 }
                 
-                val favoritesJob = scope.async<Unit> {
-                    withContext(Dispatchers.IO) {
-                        try {
-                            currentUser.uid?.let { userId ->
-                                try {
-                                    firestoreService.getUserFavorites(userId).collect { result ->
-                                        result.onSuccess { favorites: List<String> ->
-                                            userFavorites = favorites
-                                        }
-                                    }
-                                } catch (e: Exception) {
-                                    Log.e("DashboardScreen", "Error getting favorites: ${e.message}")
-                                }
-                            }
-                        } catch (e: Exception) {
-                            Log.e("DashboardScreen", "Error loading favorites: ${e.message}")
-                        }
-                    }
-                }
+                // Wait for both operations to complete
+                recipes = recipesDeferred.await()
                 
-                // Wait for both jobs to complete
-                recipes = recipesJob.await()
-                favoritesJob.await()
+                // Initialize predefined recipes only if needed (first time)
+                if (recipes.isEmpty()) {
+                    firestoreService.initializePredefinedRecipes()
+                    // Reload recipes after initialization
+                    recipes = firestoreService.getRecipesForCurrentUser()
+                }
                 
             } catch (e: Exception) {
                 error = "Failed to load recipes: ${e.message}"
@@ -266,9 +170,7 @@ fun DashboardScreen(
     // Load recipes when the screen is first displayed
     LaunchedEffect(Unit) {
         visible = true
-        if (currentUser != null) {
-            loadRecipes()
-        }
+        loadRecipes()
     }
     
     // Only reload recipes when the user changes, not on every recomposition
@@ -289,7 +191,6 @@ fun DashboardScreen(
                 color = MaterialTheme.colorScheme.primary
             )
         }
-        return
     }
     
     // Show error message if there's an error
@@ -314,9 +215,11 @@ fun DashboardScreen(
     
     Box(modifier = Modifier.fillMaxSize()) {
         if (isLoading) {
-            // This is a duplicate loading indicator, remove it
+            CircularProgressIndicator(
+                modifier = Modifier.align(Alignment.Center)
+            )
         } else {
-            // Debug button for testing Firestore - REMOVED
+            // Debug button for testing Firestore
             if (error != null) {
                 Column(
                     modifier = Modifier
@@ -330,6 +233,35 @@ fun DashboardScreen(
                         color = MaterialTheme.colorScheme.error,
                         textAlign = TextAlign.Center
                     )
+                    
+                    Spacer(modifier = Modifier.height(16.dp))
+                    
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                try {
+                                    // Check Firestore permissions
+                                    firestoreService.checkFirestorePermissions().onSuccess {
+                                        error = "Firestore permissions check successful. Trying to add test recipe..."
+                                        
+                                        // Add test recipe
+                                        firestoreService.addTestRecipe().onSuccess {
+                                            error = "Test recipe added successfully. Reloading recipes..."
+                                            loadRecipes()
+                                        }.onFailure { exception ->
+                                            error = "Failed to add test recipe: ${exception.message}"
+                                        }
+                                    }.onFailure { exception ->
+                                        error = "Firestore permissions check failed: ${exception.message}"
+                                    }
+                                } catch (e: Exception) {
+                                    error = "Error: ${e.message}"
+                                }
+                            }
+                        }
+                    ) {
+                        Text("Debug Firestore")
+                    }
                 }
             } else {
                 when (selectedTab) {
@@ -366,7 +298,7 @@ fun DashboardScreen(
                                             .size(40.dp)
                                             .clip(CircleShape)
                                             .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.2f))
-                                            .clickable { selectedTab = DashboardTab.PROFILE },
+                                            .clickable { showProfileDialog = true },
                                         contentAlignment = Alignment.Center
                                     ) {
                                         Icon(
@@ -376,22 +308,7 @@ fun DashboardScreen(
                                         )
                                     }
                                     
-                                    IconButton(
-                                        onClick = {
-                                            Log.d("DashboardScreen", "Top bar logout clicked")
-                                            try {
-                                                // First sign out from Firebase
-                                                authService.signOut()
-                                                Log.d("DashboardScreen", "Firebase sign out successful from top bar")
-                                                // Then navigate to login screen
-                                                onSignOut()
-                                                Log.d("DashboardScreen", "Navigation callback called from top bar")
-                                            } catch (e: Exception) {
-                                                Log.e("DashboardScreen", "Top bar logout failed: ${e.message}", e)
-                                                error = "Failed to sign out: ${e.message}"
-                                            }
-                                        }
-                                    ) {
+                                    IconButton(onClick = onSignOut) {
                                         Icon(
                                             imageVector = Icons.AutoMirrored.Filled.Logout,
                                             contentDescription = "Sign Out",
@@ -431,8 +348,7 @@ fun DashboardScreen(
                                     FilterChip(
                                         selected = selectedCategories.contains(category),
                                         onClick = {
-                                            selectedCategories =
-                                                if (category == RecipeCategory.ALL) {
+                                            selectedCategories = if (category == RecipeCategory.ALL) {
                                                 setOf(RecipeCategory.ALL)
                                             } else {
                                                 val newSet = selectedCategories.toMutableSet()
@@ -485,32 +401,75 @@ fun DashboardScreen(
                                     else -> emptyList()
                                 }
 
-                                // Grid layout for recipes
-                                LazyVerticalGrid(
-                                    columns = GridCells.Fixed(2),
+                                // Log the number of recipes found
+                                Log.d(DashboardScreenConstants.TAG, "Found ${filteredRecipes.size} recipes after filtering")
+
+                                // Separate user recipes and predefined recipes
+                                val userRecipes = filteredRecipes.filter { it.userId.isNotEmpty() && it.userId != "predefined" }
+                                val predefinedRecipes = filteredRecipes.filter { it.userId.isEmpty() || it.userId == "predefined" }
+
+                                Log.d(DashboardScreenConstants.TAG, "User recipes: ${userRecipes.size}, Predefined recipes: ${predefinedRecipes.size}")
+
+                                val scrollState = rememberLazyListState()
+
+                                Box(
+                                    modifier = Modifier.fillMaxSize()
+                                ) {
+                                    LazyColumn(
+                                        state = scrollState,
                                         modifier = Modifier
                                             .fillMaxSize()
-                                        .padding(horizontal = 8.dp),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                                    contentPadding = PaddingValues(8.dp)
+                                            .padding(horizontal = 16.dp),
+                                        verticalArrangement = Arrangement.spacedBy(16.dp)
                                     ) {
-                                        if (filteredRecipes.isNotEmpty()) {
-                                            items(filteredRecipes) { recipe ->
+                                        // Show predefined recipes first
+                                        if (predefinedRecipes.isNotEmpty()) {
+                                            item {
+                                                Text(
+                                                    text = "Predefined Recipes",
+                                                    style = MaterialTheme.typography.titleMedium,
+                                                    fontWeight = FontWeight.Bold,
+                                                    modifier = Modifier.padding(vertical = 8.dp)
+                                                )
+                                            }
+                                            
+                                            items(predefinedRecipes) { recipe ->
+                                        RecipeCard(
+                                            recipe = recipe,
+                                                    isFavorite = userFavorites.contains(recipe.id),
+                                            onFavoriteClick = { 
+                                                        updateFavorites(recipe.id, !userFavorites.contains(recipe.id))
+                                                    },
+                                                    onClick = { showRecipeDetails = recipe }
+                                                )
+                                            }
+                                        }
+                                        
+                                        // Show user recipes
+                                        if (userRecipes.isNotEmpty()) {
+                                            item {
+                                                Text(
+                                                    text = "My Recipes",
+                                                    style = MaterialTheme.typography.titleMedium,
+                                                    fontWeight = FontWeight.Bold,
+                                                    modifier = Modifier.padding(vertical = 8.dp)
+                                                )
+                                            }
+                                            
+                                            items(userRecipes) { recipe ->
                                                 RecipeCard(
                                                     recipe = recipe,
                                                     isFavorite = userFavorites.contains(recipe.id),
                                                     onFavoriteClick = { 
-                                                    scope.launch {
                                                         updateFavorites(recipe.id, !userFavorites.contains(recipe.id))
-                                                    }
                                                     },
-                                                onClick = {
-                                                    showRecipeDetails = recipe
-                                                }
+                                                    onClick = { showRecipeDetails = recipe }
                                                 )
                                             }
-                                        } else {
+                                        }
+                                        
+                                        // Show message if no recipes found
+                                        if (filteredRecipes.isEmpty()) {
                                             item {
                                                 Box(
                                                     modifier = Modifier
@@ -530,7 +489,7 @@ fun DashboardScreen(
                                 }
                             }
                         }
-
+                    }
                     DashboardTab.FAVORITES -> {
                         Column(
                             modifier = Modifier
@@ -566,8 +525,7 @@ fun DashboardScreen(
                                     FilterChip(
                                         selected = selectedCategories.contains(category),
                                         onClick = {
-                                            selectedCategories =
-                                                if (selectedCategories.contains(category)) {
+                                            selectedCategories = if (selectedCategories.contains(category)) {
                                                 if (selectedCategories.size > 1) {
                                                     selectedCategories - category
                                                 } else {
@@ -597,19 +555,24 @@ fun DashboardScreen(
                                 modifier = Modifier.fillMaxSize()
                             ) {
                                 val filteredRecipes = recipes.filter { recipe ->
-                                    userFavorites.contains(recipe.id) &&
                                     (searchQuery.isEmpty() || 
-                                                    recipe.name.contains(
-                                                        searchQuery,
-                                                        ignoreCase = true
-                                                    ) ||
-                                                    recipe.description.contains(
-                                                        searchQuery,
-                                                        ignoreCase = true
-                                                    )) &&
+                                     recipe.name.contains(searchQuery, ignoreCase = true) || 
+                                     recipe.description.contains(searchQuery, ignoreCase = true)) &&
                                     (selectedCategories.contains(RecipeCategory.ALL) || 
                                      selectedCategories.contains(recipe.category))
                                 }
+                                    
+                                    // Separate user recipes and predefined recipes
+                                    val userFavoriteRecipes = filteredRecipes.filter { 
+                                        userFavorites.contains(it.id) && 
+                                        it.userId.isNotEmpty() && 
+                                        it.userId != "predefined" 
+                                    }
+                                    
+                                    val predefinedFavoriteRecipes = filteredRecipes.filter { 
+                                        userFavorites.contains(it.id) && 
+                                        (it.userId.isEmpty() || it.userId == "predefined") 
+                                    }
                                 
                                 val scrollState = rememberLazyListState()
                                 
@@ -620,36 +583,66 @@ fun DashboardScreen(
                                         .padding(horizontal = 16.dp),
                                     verticalArrangement = Arrangement.spacedBy(16.dp)
                                 ) {
-                                    // Show all favorite recipes without separation
-                                    if (filteredRecipes.isNotEmpty()) {
-                                        items(filteredRecipes) { recipe ->
-                                            RecipeCard(
-                                                recipe = recipe,
-                                                isFavorite = userFavorites.contains(recipe.id),
-                                                onFavoriteClick = { 
-                                                    scope.launch {
-                                                        updateFavorites(recipe.id, !userFavorites.contains(recipe.id))
-                                                    }
-                                                },
-                                                onClick = {
-                                                    showRecipeDetails = recipe
-                                                }
+                                        // Show predefined favorite recipes first
+                                        if (predefinedFavoriteRecipes.isNotEmpty()) {
+                                            item {
+                                                Text(
+                                                    text = "Predefined Favorites",
+                                                    style = MaterialTheme.typography.titleMedium,
+                                                    fontWeight = FontWeight.Bold,
+                                                    modifier = Modifier.padding(vertical = 8.dp)
+                                                )
+                                            }
+                                            
+                                            items(predefinedFavoriteRecipes) { recipe ->
+                                        RecipeCard(
+                                            recipe = recipe,
+                                            isFavorite = true,
+                                            onFavoriteClick = { 
+                                                    updateFavorites(recipe.id, false)
+                                            },
+                                            onClick = { showRecipeDetails = recipe }
+                                        )
+                                    }
+                                }
+                                
+                                    // Show user favorite recipes
+                                    if (userFavoriteRecipes.isNotEmpty()) {
+                                        item {
+                                Text(
+                                                text = "My Favorite Recipes",
+                                                style = MaterialTheme.typography.titleMedium,
+                                                fontWeight = FontWeight.Bold,
+                                                modifier = Modifier.padding(vertical = 8.dp)
                                             )
                                         }
-                                    } else {
-                                        // Show message if no favorite recipes found
+                                        
+                                        items(userFavoriteRecipes) { recipe ->
+                                            RecipeCard(
+                                                recipe = recipe,
+                                                isFavorite = true,
+                                                onFavoriteClick = { 
+                                                    updateFavorites(recipe.id, false)
+                                                },
+                                                onClick = { showRecipeDetails = recipe }
+                                            )
+                                        }
+                                    }
+                                    
+                                    // Show message if no favorite recipes found
+                                    if (userFavoriteRecipes.isEmpty() && predefinedFavoriteRecipes.isEmpty()) {
                                         item {
                                             Box(
-                                                modifier = Modifier
+                                    modifier = Modifier
                                                     .fillMaxWidth()
                                                     .padding(vertical = 32.dp),
                                                 contentAlignment = Alignment.Center
                                             ) {
                                                 Text(
                                                     text = "No favorite recipes yet",
-                                                    style = MaterialTheme.typography.bodyLarge,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                )
+                                            style = MaterialTheme.typography.bodyLarge,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
                                             }
                                         }
                                     }
@@ -657,242 +650,15 @@ fun DashboardScreen(
                             }
                         }
                     }
-
                     DashboardTab.SETTINGS -> {
-                        Box(
-                            modifier = Modifier.fillMaxSize()
-                        ) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .padding(16.dp)
-                                    .verticalScroll(rememberScrollState())
-                            ) {
-                                Text(
-                                    text = "Settings",
-                                    style = MaterialTheme.typography.headlineMedium,
-                                    color = MaterialTheme.colorScheme.onBackground,
-                                    modifier = Modifier.padding(bottom = 16.dp)
-                                )
-                                
-                                // Feedback Section
-                                Card(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 8.dp),
-                                    colors = CardDefaults.cardColors(
-                                        containerColor = MaterialTheme.colorScheme.surface
-                                    )
-                                ) {
-                                    Column(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(16.dp)
-                                    ) {
-                                        Text(
-                                            text = "Feedback",
-                                            style = MaterialTheme.typography.titleMedium,
-                                            color = MaterialTheme.colorScheme.onSurface
-                                        )
-                                        Spacer(modifier = Modifier.height(8.dp))
-                                        Text(
-                                            text = "We'd love to hear your thoughts and suggestions to improve Blush Bistro.",
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                        Spacer(modifier = Modifier.height(16.dp))
-                                        OutlinedTextField(
-                                            value = feedbackText,
-                                            onValueChange = { feedbackText = it },
-                                            label = { Text("Your feedback") },
-                                            modifier = Modifier.fillMaxWidth(),
-                                            maxLines = 5,
-                                            colors = OutlinedTextFieldDefaults.colors(
-                                                focusedTextColor = MaterialTheme.colorScheme.onSurface,
-                                                unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
-                                                focusedBorderColor = MaterialTheme.colorScheme.primary,
-                                                unfocusedBorderColor = MaterialTheme.colorScheme.outline
-                                            )
-                                        )
-                                        if (error?.contains("Thank you") == true) {
-                                            Text(
-                                                text = "Success",
-                                                color = MaterialTheme.colorScheme.primary,
-                                                style = MaterialTheme.typography.bodyMedium,
-                                                modifier = Modifier.padding(top = 8.dp)
-                                            )
-                                        }
-                                        Spacer(modifier = Modifier.height(16.dp))
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.End
-                                        ) {
-                                            TextButton(
-                                                onClick = { feedbackText = "" },
-                                                enabled = feedbackText.isNotBlank()
-                                            ) {
-                                                Text("Clear")
-                                            }
-                                            Spacer(modifier = Modifier.width(8.dp))
-                                            Button(
-                                                onClick = {
-                                                    if (feedbackText.isNotBlank()) {
-                                                        scope.launch {
-                                                            try {
-                                                                val currentUser = authService.getCurrentUser()
-                                                                if (currentUser == null) {
-                                                                    error = "Please sign in to submit feedback"
-                                                                    return@launch
-                                                                }
-
-                                                                firestoreService.saveUserFeedback(
-                                                                    currentUser.uid,
-                                                                    feedbackText
-                                                                ).onSuccess {
-                                                                    feedbackText = ""
-                                                                    error = "Thank you for your feedback!"
-                                                                    // Clear the success message after 3 seconds
-                                                                    kotlinx.coroutines.delay(3000)
-                                                                    error = null
-                                                                }.onFailure { exception ->
-                                                                    error = "Failed to submit feedback: ${exception.message}"
-                                                                }
-                                                            } catch (e: Exception) {
-                                                                error = "Failed to submit feedback: ${e.message}"
-                                                            }
-                                                        }
-                                                    }
-                                                },
-                                                enabled = feedbackText.isNotBlank()
-                                            ) {
-                                                Text("Submit")
-                                            }
-                                        }
-                                    }
-                                }
-
-                                // Notification Settings
-                                Card(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 8.dp),
-                                    colors = CardDefaults.cardColors(
-                                        containerColor = MaterialTheme.colorScheme.surface
-                                    )
-                                ) {
-                                    Column(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(16.dp)
-                                    ) {
-                                        Text(
-                                            text = "Notifications",
-                                            style = MaterialTheme.typography.titleMedium,
-                                            color = MaterialTheme.colorScheme.onSurface
-                                        )
-                                        Spacer(modifier = Modifier.height(8.dp))
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.SpaceBetween,
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Text(
-                                                "Enable Notifications",
-                                                color = MaterialTheme.colorScheme.onSurface
-                                            )
-                                            Switch(
-                                                checked = notificationsEnabled,
-                                                onCheckedChange = { newValue ->
-                                                    scope.launch {
-                                                        try {
-                                                            settingsService.updateNotificationPreference(newValue)
-                                                            notificationsEnabled = newValue
-                                                        } catch (e: Exception) {
-                                                            error = "Failed to update notifications: ${e.message}"
-                                                        }
-                                                    }
-                                                }
-                                            )
-                                        }
-                                    }
-                                }
-
-                                // About Section
-                                Card(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 8.dp),
-                                    colors = CardDefaults.cardColors(
-                                        containerColor = MaterialTheme.colorScheme.surface
-                                    )
-                                ) {
-                                    Column(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(16.dp)
-                                    ) {
-                                        Text(
-                                            text = "About",
-                                            style = MaterialTheme.typography.titleMedium,
-                                            color = MaterialTheme.colorScheme.onSurface
-                                        )
-                                        Spacer(modifier = Modifier.height(8.dp))
-                                        Text(
-                                            text = "Blush Bistro v1.0.0\n\n" +
-                                                   "A modern recipe management app that helps you organize and discover delicious recipes.",
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
-
-                                // Privacy Policy Section
-                                Card(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 8.dp),
-                                    colors = CardDefaults.cardColors(
-                                        containerColor = MaterialTheme.colorScheme.surface
-                                    )
-                                ) {
-                                    Column(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(16.dp)
-                                    ) {
-                                        Text(
-                                            text = "Privacy Policy",
-                                            style = MaterialTheme.typography.titleMedium,
-                                            color = MaterialTheme.colorScheme.onSurface
-                                        )
-                                        Spacer(modifier = Modifier.height(8.dp))
-                                        Text(
-                                            text = "Your privacy is important to us. We collect minimal data necessary to provide our services and improve your experience.",
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
-                            }
-                        }
+                        SettingsScreen()
                     }
-
                     DashboardTab.PROFILE -> {
                     UserProfileDialog(
                             onDismiss = { selectedTab = DashboardTab.HOME },
                         onSignOut = {
-                                Log.d("DashboardScreen", "Profile dialog logout clicked")
-                                try {
-                                    // First sign out from Firebase
-                                    authService.signOut()
-                                    Log.d("DashboardScreen", "Firebase sign out successful from profile dialog")
-                                    // Then navigate to login screen
+                                selectedTab = DashboardTab.HOME
                             onSignOut()
-                                    Log.d("DashboardScreen", "Navigation callback called from profile dialog")
-                                } catch (e: Exception) {
-                                    Log.e("DashboardScreen", "Profile dialog logout failed: ${e.message}", e)
-                                    error = "Failed to sign out: ${e.message}"
-                                }
                         }
                         )
                     }
@@ -963,25 +729,37 @@ fun DashboardScreen(
                     RecipeDetailsDialog(
                         recipe = showRecipeDetails!!,
                             onDismiss = { showRecipeDetails = null },
+                            onEdit = { updatedRecipe ->
+                                scope.launch {
+                                    try {
+                                        firestoreService.updateRecipe(updatedRecipe).onSuccess {
+                                            loadRecipes() // Reload the recipes list
+                                            showRecipeDetails = null
+                                        }.onFailure { exception ->
+                                            error = exception.message ?: "Failed to update recipe"
+                                        }
+                                    } catch (e: Exception) {
+                                        error = e.message ?: "Failed to update recipe"
+                                    }
+                                }
+                            },
                             onDelete = {
                                 scope.launch {
                                     try {
-                                    firestoreService.deleteRecipe(showRecipeDetails!!.id)
-                                    recipes = recipes.filter { it.id != showRecipeDetails!!.id }
+                                        firestoreService.deleteRecipe(showRecipeDetails!!.id).onSuccess {
+                                            loadRecipes() // Reload the recipes list
                                             showRecipeDetails = null
+                                        }.onFailure { exception ->
+                                            error = exception.message ?: "Failed to delete recipe"
+                                        }
                                     } catch (e: Exception) {
-                                    error = "Failed to delete recipe: ${e.message}"
+                                        error = e.message ?: "Failed to delete recipe"
                                     }
                                 }
                             },
                             isFavorite = userFavorites.contains(showRecipeDetails!!.id),
                             onFavoriteClick = {
-                            scope.launch {
-                                updateFavorites(
-                                    showRecipeDetails!!.id,
-                                    !userFavorites.contains(showRecipeDetails!!.id)
-                                )
-                            }
+                                updateFavorites(showRecipeDetails!!.id, !userFavorites.contains(showRecipeDetails!!.id))
                             }
                         )
                     }
@@ -1005,16 +783,18 @@ fun DashboardScreen(
             }
         }
     }
-
+}
 
 @Composable
 fun RecipeDetailsDialog(
     recipe: Recipe,
     onDismiss: () -> Unit,
+    onEdit: (Recipe) -> Unit,
     onDelete: () -> Unit,
     isFavorite: Boolean = false,
     onFavoriteClick: () -> Unit = {}
 ) {
+    var showEditDialog by remember { mutableStateOf(false) }
     var showDeleteConfirmation by remember { mutableStateOf(false) }
     
     MaterialTheme {
@@ -1061,11 +841,11 @@ fun RecipeDetailsDialog(
                     Spacer(modifier = Modifier.height(16.dp))
 
                         Image(
-                            painter = painterResource(id = recipe.getActualImageResId()),
-                            contentDescription = "Recipe Image",
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(200.dp),
+                            painter = painterResource(id = recipe.imageResId),
+                        contentDescription = "Recipe Image",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(200.dp),
                             contentScale = ContentScale.Crop
                         )
                     
@@ -1125,12 +905,34 @@ fun RecipeDetailsDialog(
                         )
                             Spacer(modifier = Modifier.width(4.dp))
                             Text("Delete")
+                    }
+                        Spacer(modifier = Modifier.width(8.dp))
+                    Button(
+                            onClick = { showEditDialog = true }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Edit,
+                                contentDescription = "Edit"
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Edit")
                         }
                     }
                 }
             },
             confirmButton = { }
         )
+
+        if (showEditDialog) {
+            AddRecipeDialog(
+                onDismiss = { showEditDialog = false },
+                onRecipeAdded = { updatedRecipe ->
+                    val recipeWithId = updatedRecipe.copy(id = recipe.id)
+                    onEdit(recipeWithId)
+                    showEditDialog = false
+                }
+            )
+        }
 
         if (showDeleteConfirmation) {
     AlertDialog(
@@ -1169,19 +971,6 @@ fun AddRecipeDialog(
     var ingredients by remember { mutableStateOf("") }
     var instructions by remember { mutableStateOf("") }
     var expanded by remember { mutableStateOf(false) }
-    
-    // Function to get the appropriate image resource ID based on category
-    fun getImageResIdForCategory(category: RecipeCategory): Int {
-        return when (category) {
-            RecipeCategory.BREAKFAST -> R.drawable.avocado_toast_image
-            RecipeCategory.LUNCH -> R.drawable.salad_image
-            RecipeCategory.DINNER -> R.drawable.beef_bourguignon_image
-            RecipeCategory.DESSERT -> R.drawable.chocolate_lava_cake_image
-            RecipeCategory.ITALIAN -> R.drawable.pasta_primavera_image
-            RecipeCategory.FRENCH -> R.drawable.ratatouille_image
-            else -> R.drawable.cake_image
-        }
-    }
     
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1264,21 +1053,18 @@ fun AddRecipeDialog(
         confirmButton = {
             TextButton(
                 onClick = {
-                    val imageRes = getImageResIdForCategory(selectedCategory)
                     val recipe = Recipe(
                         name = name,
                         description = description,
-                        cookTime = cookTime,
-                        imageResId = imageRes,  // Set the image resource based on category
-                        category = selectedCategory,
-                        rating = 0f,
-                        reviewCount = 0,
+                            cookTime = cookTime,
+                        imageResId = R.drawable.cake_image,
+                            category = selectedCategory,
+                            rating = 0f,
+                            reviewCount = 0,
                         ingredients = ingredients.split("\n").filter { it.isNotBlank() },
-                        cookingInstructions = instructions.split("\n")
-                            .filter { it.isNotBlank() }
-                    )
+                        cookingInstructions = instructions.split("\n").filter { it.isNotBlank() }
+                        )
                     onRecipeAdded(recipe)
-                    onDismiss()
                 }
             ) {
                 Text("Save")
@@ -1290,145 +1076,4 @@ fun AddRecipeDialog(
             }
         }
     )
-} 
-
-@Composable
-private fun RecipeCard(
-    recipe: Recipe,
-    isFavorite: Boolean,
-    onFavoriteClick: () -> Unit,
-    onClick: () -> Unit
-) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onClick() },
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface
-        ),
-        shape = RoundedCornerShape(16.dp)
-    ) {
-        Column(
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            // Recipe Image
-            Image(
-                painter = painterResource(id = recipe.getActualImageResId()),
-                contentDescription = "Recipe Image",
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(200.dp),
-                contentScale = ContentScale.Crop
-            )
-            
-            // Recipe Content
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = recipe.name,
-                            style = MaterialTheme.typography.titleLarge,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = recipe.description,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                    if (!recipe.userId.equals("predefined")) {
-                        IconButton(onClick = onFavoriteClick) {
-                            Icon(
-                                imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                                contentDescription = if (isFavorite) "Remove from favorites" else "Add to favorites",
-                                tint = if (isFavorite) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-                    }
-                }
-                
-                Spacer(modifier = Modifier.height(8.dp))
-                
-                // Recipe Details Row
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // Cook Time
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Timer,
-                            contentDescription = "Cook Time",
-                            modifier = Modifier.size(16.dp),
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = "${recipe.cookTime} min",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    
-                    // Category
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Category,
-                            contentDescription = "Category",
-                            modifier = Modifier.size(16.dp),
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = recipe.category.name,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                    
-                    // Rating
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Star,
-                            contentDescription = "Rating",
-                            modifier = Modifier.size(16.dp),
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = String.format("%.1f", recipe.rating),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-                
-                // Review Count
-                Text(
-                    text = "${recipe.reviewCount} reviews",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp)
-                )
-            }
-        }
-    }
 } 

@@ -18,7 +18,6 @@ fun BackgroundGradient(
     content: @Composable () -> Unit
 ) {
     val configuration = LocalConfiguration.current
-    val screenWidth = configuration.screenWidthDp.dp
     val screenHeight = configuration.screenHeightDp.dp
     
     // Create a beautiful gradient background
@@ -59,10 +58,6 @@ fun AnimatedBackgroundGradient(
     isDarkTheme: Boolean = false,
     content: @Composable () -> Unit
 ) {
-    val configuration = LocalConfiguration.current
-    val screenWidth = configuration.screenWidthDp.dp
-    val screenHeight = configuration.screenHeightDp.dp
-    
     // Create a beautiful animated gradient background
     val gradientColors = if (isDarkTheme) {
         listOf(

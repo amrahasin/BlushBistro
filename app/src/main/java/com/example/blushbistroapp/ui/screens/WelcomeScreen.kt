@@ -78,18 +78,7 @@ fun WelcomeScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
-                // Animated logo with floating effect
-                val infiniteTransition = rememberInfiniteTransition(label = "logo")
-                val logoOffset by infiniteTransition.animateFloat(
-                    initialValue = 0f,
-                    targetValue = 10f,
-                    animationSpec = infiniteRepeatable(
-                        animation = tween(2000, easing = LinearEasing),
-                        repeatMode = RepeatMode.Reverse
-                    ),
-                    label = "logoFloat"
-                )
-                
+                // Animated logo
                 AnimatedVisibility(
                     visible = isVisible,
                     enter = fadeIn(animationSpec = tween(1000))

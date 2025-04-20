@@ -10,202 +10,199 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.blushbistroapp.ui.components.ThemeToggle
+import com.example.blushbistroapp.data.FirebaseAuthService
+import com.example.blushbistroapp.data.FirestoreService
+import com.google.firebase.firestore.FirebaseFirestore
+import kotlinx.coroutines.launch
 
 @Composable
 fun SettingsScreen() {
-    var showThemeDialog by remember { mutableStateOf(false) }
-    var showNotificationsDialog by remember { mutableStateOf(false) }
-    var showLanguageDialog by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val firestoreService = remember { FirestoreService.getInstance(FirebaseFirestore.getInstance()) }
+    val authService = remember { FirebaseAuthService.getInstance(context) }
+    val currentUser = authService.getCurrentUser()
+
+    var feedbackText by remember { mutableStateOf("") }
+    var showSuccessMessage by remember { mutableStateOf(false) }
+    var showErrorMessage by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf("") }
     
+    val scrollState = rememberScrollState()
+    
+    Box(
+        modifier = Modifier.fillMaxSize()
+    ) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
+                .verticalScroll(scrollState)
             .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+            verticalArrangement = Arrangement.spacedBy(24.dp)
     ) {
-        // App Settings
+            // Notifications Section
         Card(
             modifier = Modifier.fillMaxWidth(),
-            shape = MaterialTheme.shapes.large
+                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 Text(
-                    text = "App Settings",
+                        text = "Notifications",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold
                 )
                 
-                // Theme
-                SettingsItem(
-                    icon = Icons.Default.Palette,
-                    title = "Theme",
-                    subtitle = "Change app theme",
-                    onClick = { showThemeDialog = true }
-                )
-                
-                Divider()
-                
-                // Notifications
                 SettingsItem(
                     icon = Icons.Default.Notifications,
-                    title = "Notifications",
-                    subtitle = "Manage notification preferences",
-                    onClick = { showNotificationsDialog = true }
+                        title = "Push Notifications",
+                        subtitle = "Receive updates about new recipes and features",
+                        onClick = { /* TODO: Implement notification settings */ }
+                    )
+                }
+            }
+            
+            // Feedback Section
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Text(
+                        text = "Feedback",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
                 )
                 
-                Divider()
-                
-                // Language
-                SettingsItem(
-                    icon = Icons.Default.Language,
-                    title = "Language",
-                    subtitle = "Change app language",
-                    onClick = { showLanguageDialog = true }
-                )
+                    Text(
+                        text = "We'd love to hear your thoughts and suggestions to improve the app.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    
+                    OutlinedTextField(
+                        value = feedbackText,
+                        onValueChange = { feedbackText = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Your feedback") },
+                        placeholder = { Text("Type your feedback here...") },
+                        minLines = 3
+                    )
+                    
+                    if (showSuccessMessage) {
+                        LaunchedEffect(Unit) {
+                            kotlinx.coroutines.delay(3000)
+                            showSuccessMessage = false
+                        }
+                        Text(
+                            text = "Success",
+                            color = MaterialTheme.colorScheme.primary,
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.padding(top = 8.dp)
+                        )
+                    }
+                    
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        TextButton(
+                            onClick = { feedbackText = "" },
+                            enabled = feedbackText.isNotBlank()
+                        ) {
+                            Text("Clear")
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(
+                            onClick = {
+                                if (feedbackText.isNotBlank()) {
+                                    scope.launch {
+                                        try {
+                                            currentUser?.uid?.let { userId ->
+                                                firestoreService.saveUserFeedback(userId, feedbackText)
+                                                    .onSuccess {
+                                                        showSuccessMessage = true
+                                                        feedbackText = ""
+                                                    }
+                                                    .onFailure { exception ->
+                                                        errorMessage = exception.message ?: "Failed to send feedback"
+                                                        showErrorMessage = true
+                                                        kotlinx.coroutines.delay(3000)
+                                                        showErrorMessage = false
+                                                    }
+                                            }
+                                        } catch (e: Exception) {
+                                            errorMessage = "Failed to send feedback: ${e.message}"
+                                            showErrorMessage = true
+                                            kotlinx.coroutines.delay(3000)
+                                            showErrorMessage = false
+                                        }
+                                    }
+                                }
+                            },
+                            enabled = feedbackText.isNotBlank()
+                        ) {
+                            Text("Submit")
+                        }
+                    }
+                }
+            }
+            
+            // About Section
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Text(
+                        text = "About",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    
+                    SettingsItem(
+                        icon = Icons.Default.Info,
+                        title = "Privacy Policy",
+                        subtitle = "Read our privacy policy",
+                        onClick = { /* TODO: Implement privacy policy */ }
+                    )
+                }
             }
         }
         
-        // About
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = MaterialTheme.shapes.large
-        ) {
-            Column(
+        // Error Message
+        if (showErrorMessage) {
+            Snackbar(
                 modifier = Modifier
-                    .fillMaxWidth()
+                    .align(Alignment.BottomCenter)
                     .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                action = {
+                    TextButton(onClick = { showErrorMessage = false }) {
+                        Text("Dismiss")
+                    }
+                }
             ) {
-                Text(
-                    text = "About",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
-                )
-                
-                SettingsItem(
-                    icon = Icons.Default.Info,
-                    title = "Version",
-                    subtitle = "1.0.0"
-                )
-                
-                Divider()
-                
-                SettingsItem(
-                    icon = Icons.Default.PrivacyTip,
-                    title = "Privacy Policy",
-                    subtitle = "View our privacy policy"
-                )
-                
-                Divider()
-                
-                SettingsItem(
-                    icon = Icons.Default.Description,
-                    title = "Terms of Service",
-                    subtitle = "View our terms of service"
-                )
+                Text(errorMessage)
             }
         }
-    }
-    
-    // Theme Dialog
-    if (showThemeDialog) {
-        AlertDialog(
-            onDismissRequest = { showThemeDialog = false },
-            title = { Text("Choose Theme") },
-            text = {
-                ThemeToggle()
-            },
-            confirmButton = {
-                TextButton(onClick = { showThemeDialog = false }) {
-                    Text("Done")
-                }
-            }
-        )
-    }
-    
-    // Notifications Dialog
-    if (showNotificationsDialog) {
-        AlertDialog(
-            onDismissRequest = { showNotificationsDialog = false },
-            title = { Text("Notification Settings") },
-            text = {
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("Recipe Updates")
-                        Switch(
-                            checked = true,
-                            onCheckedChange = { }
-                        )
-                    }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("New Features")
-                        Switch(
-                            checked = true,
-                            onCheckedChange = { }
-                        )
-                    }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("Promotions")
-                        Switch(
-                            checked = false,
-                            onCheckedChange = { }
-                        )
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showNotificationsDialog = false }) {
-                    Text("Done")
-                }
-            }
-        )
-    }
-    
-    // Language Dialog
-    if (showLanguageDialog) {
-        AlertDialog(
-            onDismissRequest = { showLanguageDialog = false },
-            title = { Text("Choose Language") },
-            text = {
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    LanguageOption("English", true)
-                    LanguageOption("Spanish", false)
-                    LanguageOption("French", false)
-                    LanguageOption("German", false)
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showLanguageDialog = false }) {
-                    Text("Done")
-                }
-            }
-        )
     }
 }
 
@@ -214,12 +211,12 @@ fun SettingsItem(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     title: String,
     subtitle: String,
-    onClick: (() -> Unit)? = null
+    onClick: () -> Unit
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
+            .clickable(onClick = onClick),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -244,35 +241,10 @@ fun SettingsItem(
                 )
             }
         }
-        if (onClick != null) {
             Icon(
                 imageVector = Icons.Default.ChevronRight,
                 contentDescription = "Navigate",
                 tint = MaterialTheme.colorScheme.onSurfaceVariant
             )
-        }
-    }
-}
-
-@Composable
-fun LanguageOption(
-    language: String,
-    isSelected: Boolean
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { },
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(language)
-        if (isSelected) {
-            Icon(
-                imageVector = Icons.Default.Check,
-                contentDescription = "Selected",
-                tint = MaterialTheme.colorScheme.primary
-            )
-        }
     }
 } 
