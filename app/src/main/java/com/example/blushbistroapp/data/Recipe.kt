@@ -77,6 +77,7 @@ data class Recipe(
                 "chocolate cake" -> R.drawable.cake_image
                 "spaghetti bolognese" -> R.drawable.pasta_image
                 "caesar salad" -> R.drawable.caesar_salad_image
+                "classic caesar salad" -> R.drawable.caesar_salad_image
                 "berry smoothie" -> R.drawable.berry_smoothie
                 "chicken parmesan" -> R.drawable.chicken_parmesan_image
                 "vegetable curry" -> R.drawable.vegetable_curry_image
@@ -96,6 +97,16 @@ data class Recipe(
                 "beef bourguignon" -> R.drawable.beef_bourguignon_image
                 "banana bread" -> R.drawable.banana_bread_image
                 "avocado toast" -> R.drawable.avocado_toast_image
+                // Additional mappings for exact recipe names
+                "blueberry pancakes" -> R.drawable.pancakes_image
+                "grilled salmon bowl" -> R.drawable.salmon_bowl_image
+                "mushroom risotto" -> R.drawable.risotto_image
+                "vegan buddha bowl" -> R.drawable.buddha_bowl_image
+                "gluten-free pasta primavera" -> R.drawable.pasta_primavera_image
+                "vegan chocolate mousse" -> R.drawable.chocolate_mousse_image
+                "gluten-free banana bread" -> R.drawable.banana_bread_image
+                "stuffed bell peppers" -> R.drawable.stuffed_pepper
+                "vegetable stir fry" -> R.drawable.stir_fry_image
                 else -> R.drawable.cake_image
             }
         }

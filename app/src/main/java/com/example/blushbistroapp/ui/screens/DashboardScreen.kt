@@ -115,26 +115,16 @@ fun DashboardScreen(
     fun updateFavorites(recipeId: String, isFavorite: Boolean) {
         scope.launch {
             currentUser?.uid?.let { userId ->
-                val updatedFavorites = if (isFavorite) {
-                    userFavorites + recipeId
+                if (isFavorite) {
+                    firestoreService.addToFavorites(userId, recipeId)
+                        .onFailure { exception ->
+                            error = exception.message ?: "Failed to add to favorites"
+                        }
                 } else {
-                    userFavorites - recipeId
-                }
-                
-                // Save to Firestore
-                firestoreService.saveUserFavorites(userId, updatedFavorites).onSuccess {
-                    // Update local state
-                    userFavorites = updatedFavorites
-                    
-                    // Show success message
-                    error =
-                        if (isFavorite) "Recipe added to favorites" else "Recipe removed from favorites"
-                    
-                    // Clear the message after 2 seconds
-                    kotlinx.coroutines.delay(2000)
-                    error = null
-                }.onFailure { exception ->
-                    error = exception.message ?: "Failed to update favorites"
+                    firestoreService.removeFromFavorites(userId, recipeId)
+                        .onFailure { exception ->
+                            error = exception.message ?: "Failed to remove from favorites"
+                        }
                 }
             }
         }
@@ -155,31 +145,29 @@ fun DashboardScreen(
                 
                 // Initialize predefined recipes first
                 firestoreService.initializePredefinedRecipes().onSuccess {
-                // Load recipes in a coroutine
-                val recipesDeferred = scope.async {
-                    firestoreService.getRecipesForCurrentUser()
-                }
-                
-                // Load favorites in a separate coroutine
-                currentUser.uid?.let { userId ->
-                    scope.launch {
-                        firestoreService.getUserFavorites(userId).collect { result ->
-                            result.onSuccess { favorites ->
-                                userFavorites = favorites
-                            }.onFailure { exception ->
-                                error = exception.message ?: "Failed to load favorites"
+                    // Load recipes in a coroutine
+                    val recipesDeferred = scope.async {
+                        firestoreService.getRecipesForCurrentUser()
+                    }
+                    
+                    // Load favorites in a separate coroutine
+                    currentUser.uid?.let { userId ->
+                        scope.launch {
+                            firestoreService.getUserFavorites(userId).collect { result ->
+                                result.onSuccess { favorites ->
+                                    userFavorites = favorites
+                                }.onFailure { exception ->
+                                    error = exception.message ?: "Failed to load favorites"
+                                }
                             }
                         }
                     }
-                }
-                
-                // Wait for recipes to complete
-                recipes = recipesDeferred.await()
-                
+                    
+                    // Wait for recipes to complete
+                    recipes = recipesDeferred.await()
                 }.onFailure { exception ->
                     error = "Failed to initialize predefined recipes: ${exception.message}"
                 }
-                
             } catch (e: Exception) {
                 error = "Failed to load recipes: ${e.message}"
             } finally {
@@ -192,6 +180,17 @@ fun DashboardScreen(
     LaunchedEffect(Unit) {
         visible = true
         loadRecipes()
+        
+        // Load favorites
+        currentUser?.uid?.let { userId ->
+            firestoreService.getUserFavorites(userId).collect { result ->
+                result.onSuccess { favorites ->
+                    userFavorites = favorites
+                }.onFailure { exception ->
+                    error = exception.message ?: "Failed to load favorites"
+                }
+            }
+        }
     }
     
     // Only reload recipes when the user changes, not on every recomposition
@@ -636,14 +635,6 @@ fun DashboardScreen(
                                                 unfocusedBorderColor = MaterialTheme.colorScheme.outline
                                             )
                                         )
-                                        if (error?.contains("Thank you") == true) {
-                                            Text(
-                                                text = "Success",
-                                                color = MaterialTheme.colorScheme.primary,
-                                                style = MaterialTheme.typography.bodyMedium,
-                                                modifier = Modifier.padding(top = 8.dp)
-                                            )
-                                        }
                                         Spacer(modifier = Modifier.height(16.dp))
                                         Row(
                                             modifier = Modifier.fillMaxWidth(),
@@ -670,12 +661,11 @@ fun DashboardScreen(
                                                                 firestoreService.saveUserFeedback(
                                                                     currentUser.uid,
                                                                     feedbackText
-                                                                )
-                                                                feedbackText = ""
-                                                                error = "Thank you for your feedback!"
-                                                                // Clear the success message after 3 seconds
-                                                                kotlinx.coroutines.delay(3000)
-                                                                error = null
+                                                                ).onSuccess {
+                                                                    feedbackText = ""
+                                                                }.onFailure { e ->
+                                                                    error = "Failed to submit feedback: ${e.message}"
+                                                                }
                                                             } catch (e: Exception) {
                                                                 error = "Failed to submit feedback: ${e.message}"
                                                             }
@@ -973,20 +963,20 @@ fun RecipeDetailsDialog(
             },
             text = {
                 Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
                         .verticalScroll(rememberScrollState())
-                    ) {
+                ) {
                     Spacer(modifier = Modifier.height(16.dp))
 
-                        Image(
-                            painter = painterResource(id = recipe.getActualImageResId()),
-                            contentDescription = "Recipe Image",
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(200.dp),
-                            contentScale = ContentScale.Crop
-                        )
+                    Image(
+                        painter = painterResource(id = recipe.getActualImageResId()),
+                        contentDescription = "Recipe Image",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(200.dp),
+                        contentScale = ContentScale.Crop
+                    )
                     
                     Spacer(modifier = Modifier.height(16.dp))
 
@@ -997,17 +987,17 @@ fun RecipeDetailsDialog(
                     
                     Spacer(modifier = Modifier.height(8.dp))
 
-                        Text(
+                    Text(
                         text = "Cook Time: ${recipe.cookTime} minutes",
                         style = MaterialTheme.typography.bodyMedium
                     )
 
                     Spacer(modifier = Modifier.height(8.dp))
 
-                        Text(
+                    Text(
                         text = "Category: ${recipe.category.name}",
                         style = MaterialTheme.typography.bodyMedium
-                        )
+                    )
                     
                     Spacer(modifier = Modifier.height(16.dp))
 
@@ -1021,7 +1011,7 @@ fun RecipeDetailsDialog(
 
                     Spacer(modifier = Modifier.height(16.dp))
 
-                        Text(
+                    Text(
                         text = "Instructions:",
                         style = MaterialTheme.typography.titleMedium
                     )
@@ -1031,19 +1021,22 @@ fun RecipeDetailsDialog(
 
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End
-                    ) {
-                        TextButton(
-                            onClick = { showDeleteConfirmation = true }
-                    ) {
-                        Icon(
-                                imageVector = Icons.Default.Delete,
-                                contentDescription = "Delete"
-                        )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Delete")
+                    // Only show delete button for non-predefined recipes
+                    if (!recipe.userId.equals("predefined")) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            TextButton(
+                                onClick = { showDeleteConfirmation = true }
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Delete,
+                                    contentDescription = "Delete"
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Delete")
+                            }
                         }
                     }
                 }
@@ -1052,7 +1045,7 @@ fun RecipeDetailsDialog(
         )
 
         if (showDeleteConfirmation) {
-    AlertDialog(
+            AlertDialog(
                 onDismissRequest = { showDeleteConfirmation = false },
                 title = { Text("Delete Recipe") },
                 text = { Text("Are you sure you want to delete this recipe?") },

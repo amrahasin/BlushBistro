@@ -62,24 +62,21 @@ class FirebaseAuthService private constructor(private val context: Context) {
 
     suspend fun resetPassword(email: String): Result<Unit> {
         return try {
+            // Try to send reset email directly
             auth.sendPasswordResetEmail(email).await()
+            Log.d(TAG, "Password reset email sent successfully to $email")
             Result.success(Unit)
         } catch (e: FirebaseAuthException) {
-            Log.e(TAG, "Password reset failed", e)
+            Log.e(TAG, "Password reset failed with FirebaseAuthException", e)
             when (e.errorCode) {
-                "ERROR_USER_NOT_FOUND" -> {
-                    Result.failure(Exception("No account found with this email address"))
-                }
-                "ERROR_INVALID_EMAIL" -> {
-                    Result.failure(Exception("Invalid email format"))
-                }
-                else -> {
-                    Result.failure(Exception("Failed to send reset email: ${e.message}"))
-                }
+                "ERROR_INVALID_EMAIL" -> Result.failure(Exception("Please enter a valid email address"))
+                "ERROR_USER_NOT_FOUND" -> Result.failure(Exception("No account found with this email address"))
+                "ERROR_TOO_MANY_REQUESTS" -> Result.failure(Exception("Too many attempts. Please try again later"))
+                else -> Result.failure(Exception("Failed to send reset email. Please try again"))
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Password reset failed", e)
-            Result.failure(Exception("Failed to send reset email: ${e.message}"))
+            Log.e(TAG, "Password reset failed with unexpected error", e)
+            Result.failure(Exception("Failed to send reset email. Please try again"))
         }
     }
 
@@ -87,6 +84,27 @@ class FirebaseAuthService private constructor(private val context: Context) {
 
     fun signOut() {
         auth.signOut()
+    }
+
+    suspend fun isEmailRegistered(email: String): Boolean {
+        return try {
+            val result = auth.fetchSignInMethodsForEmail(email).await()
+            result.signInMethods?.isNotEmpty() ?: false
+        } catch (e: FirebaseAuthException) {
+            when (e.errorCode) {
+                "ERROR_INVALID_EMAIL" -> {
+                    Log.e(TAG, "Invalid email format")
+                    false
+                }
+                else -> {
+                    Log.e(TAG, "Error checking email registration: ${e.message}")
+                    false
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error checking email registration: ${e.message}")
+            false
+        }
     }
 
     companion object {

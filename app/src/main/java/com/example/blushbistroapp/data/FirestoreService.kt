@@ -129,9 +129,7 @@ class FirestoreService @Inject constructor(
     suspend fun addToFavorites(userId: String, recipeId: String): Result<Unit> = try {
         firestore.collection("users")
             .document(userId)
-            .collection("favorites")
-            .document(recipeId)
-            .set(mapOf("recipeId" to recipeId, "addedAt" to System.currentTimeMillis()))
+            .update("favorites", FieldValue.arrayUnion(recipeId))
             .await()
         Result.success(Unit)
     } catch (e: Exception) {
@@ -142,20 +140,17 @@ class FirestoreService @Inject constructor(
     suspend fun removeFromFavorites(userId: String, recipeId: String): Result<Unit> = try {
         firestore.collection("users")
             .document(userId)
-            .collection("favorites")
-            .document(recipeId)
-            .delete()
+            .update("favorites", FieldValue.arrayRemove(recipeId))
             .await()
-            Result.success(Unit)
-        } catch (e: Exception) {
+        Result.success(Unit)
+    } catch (e: Exception) {
         Log.e(TAG, "Error removing from favorites", e)
-            Result.failure(e)
-        }
+        Result.failure(e)
+    }
 
     fun getFavorites(userId: String): Flow<Result<List<Recipe>>> = callbackFlow {
         val subscription = firestore.collection("users")
             .document(userId)
-            .collection("favorites")
             .addSnapshotListener { snapshot, error ->
                 if (error != null) {
                     Log.e(TAG, "Error getting favorites", error)
@@ -166,14 +161,14 @@ class FirestoreService @Inject constructor(
                 if (snapshot != null) {
                     coroutineScope.launch {
                         try {
-                            val recipeIds = snapshot.documents.map { it.id }
-                            if (recipeIds.isEmpty()) {
+                            val favorites = snapshot.get("favorites") as? List<String> ?: emptyList()
+                            if (favorites.isEmpty()) {
                                 trySend(Result.success(emptyList()))
                                 return@launch
                             }
 
                             val recipes = firestore.collection("recipes")
-                                .whereIn("id", recipeIds)
+                                .whereIn("id", favorites)
                                 .get()
                                 .await()
                                 .documents
@@ -192,7 +187,44 @@ class FirestoreService @Inject constructor(
                         }
                     }
                 } else {
-                    trySend(Result.success(emptyList()))
+                    // If document doesn't exist, create it with empty favorites
+                    firestore.collection("users")
+                        .document(userId)
+                        .set(mapOf("favorites" to emptyList<String>()))
+                        .addOnSuccessListener {
+                            trySend(Result.success(emptyList()))
+                        }
+                        .addOnFailureListener { e ->
+                            trySend(Result.failure(e))
+                        }
+                }
+            }
+        awaitClose { subscription.remove() }
+    }
+
+    fun getUserFavorites(userId: String): Flow<Result<List<String>>> = callbackFlow {
+        val subscription = firestore.collection("users")
+            .document(userId)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    trySend(Result.failure(error))
+                    return@addSnapshotListener
+                }
+
+                if (snapshot != null) {
+                    val favorites = snapshot.get("favorites") as? List<String> ?: emptyList()
+                    trySend(Result.success(favorites))
+                } else {
+                    // If document doesn't exist, create it with empty favorites
+                    firestore.collection("users")
+                        .document(userId)
+                        .set(mapOf("favorites" to emptyList<String>()))
+                        .addOnSuccessListener {
+                            trySend(Result.success(emptyList()))
+                        }
+                        .addOnFailureListener { e ->
+                            trySend(Result.failure(e))
+                        }
                 }
             }
         awaitClose { subscription.remove() }
@@ -203,32 +235,6 @@ class FirestoreService @Inject constructor(
         Result.success(Unit)
     } catch (e: Exception) {
         Result.failure(e)
-    }
-
-    fun getUserFavorites(userId: String): Flow<Result<List<String>>> = callbackFlow {
-            val subscription = usersCollection
-                .document(userId)
-                .addSnapshotListener { snapshot, error ->
-                    if (error != null) {
-                        trySend(Result.failure(error))
-                        return@addSnapshotListener
-                    }
-
-                    if (snapshot != null) {
-                        val favorites = snapshot.get("favorites") as? List<String> ?: emptyList()
-                        trySend(Result.success(favorites))
-                    } else {
-                        // If document doesn't exist, create it with empty favorites
-                        usersCollection.document(userId).set(mapOf("favorites" to emptyList<String>()))
-                            .addOnSuccessListener {
-                                trySend(Result.success(emptyList()))
-                            }
-                            .addOnFailureListener { e ->
-                                trySend(Result.failure(e))
-                            }
-                    }
-                }
-            awaitClose { subscription.remove() }
     }
 
     fun getRecipes(): Flow<Result<List<Recipe>>> = flow {
@@ -354,26 +360,92 @@ class FirestoreService @Inject constructor(
         }
     }
 
+    suspend fun initializeFeedbackCollection(): Result<Unit> {
+        return try {
+            Log.d(TAG, "Initializing feedback collection...")
+            
+            // Try to create a test document to ensure the collection exists
+            val testFeedback = hashMapOf(
+                "userId" to "system",
+                "userEmail" to "system@blushbistro.com",
+                "feedback" to "Test feedback",
+                "timestamp" to FieldValue.serverTimestamp(),
+                "appVersion" to "1.0",
+                "status" to "system"
+            )
+            
+            firestore.collection("feedback")
+                .add(testFeedback)
+                .await()
+            
+            Log.d(TAG, "Feedback collection initialized successfully")
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error initializing feedback collection: ${e.message}", e)
+            Result.failure(e)
+        }
+    }
+
     suspend fun saveUserFeedback(userId: String, feedback: String): Result<Unit> {
         return try {
+            Log.d(TAG, "Attempting to save feedback...")
+            
             val currentUser = auth.currentUser
             if (currentUser == null) {
+                Log.e(TAG, "User not authenticated when trying to save feedback")
                 return Result.failure(Exception("User must be logged in to send feedback"))
+            }
+            Log.d(TAG, "User authenticated: ${currentUser.uid}")
+
+            if (feedback.isBlank()) {
+                Log.e(TAG, "Empty feedback provided")
+                return Result.failure(Exception("Feedback cannot be empty"))
+            }
+
+            // Validate feedback length
+            if (feedback.length > 1000) {
+                Log.e(TAG, "Feedback too long")
+                return Result.failure(Exception("Feedback must be less than 1000 characters"))
             }
 
             val feedbackData = hashMapOf(
                 "userId" to currentUser.uid,
+                "userEmail" to (currentUser.email ?: "anonymous"),
                 "feedback" to feedback,
-                "timestamp" to FieldValue.serverTimestamp()
+                "timestamp" to FieldValue.serverTimestamp(),
+                "appVersion" to "1.0",
+                "deviceInfo" to mapOf(
+                    "platform" to "Android",
+                    "sdkVersion" to android.os.Build.VERSION.SDK_INT.toString()
+                ),
+                "status" to "new"
             )
             
-            firestore.collection("feedback")
+            Log.d(TAG, "Prepared feedback data: $feedbackData")
+            
+            // Add to feedback collection with auto-generated ID
+            val docRef = firestore.collection("feedback")
                 .add(feedbackData)
                 .await()
             
+            Log.d(TAG, "Successfully saved feedback with ID: ${docRef.id} from user ${currentUser.uid}")
             Result.success(Unit)
         } catch (e: Exception) {
             Log.e(TAG, "Error saving feedback: ${e.message}", e)
+            Log.e(TAG, "Stack trace: ${e.stackTraceToString()}")
+            Result.failure(e)
+        }
+    }
+
+    // Add a function to check if feedback collection exists
+    suspend fun checkFeedbackCollection(): Result<Boolean> {
+        return try {
+            Log.d(TAG, "Checking feedback collection...")
+            val snapshot = firestore.collection("feedback").limit(1).get().await()
+            Log.d(TAG, "Feedback collection exists: ${!snapshot.isEmpty}")
+            Result.success(!snapshot.isEmpty)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error checking feedback collection: ${e.message}", e)
             Result.failure(e)
         }
     }
@@ -1298,33 +1370,39 @@ class FirestoreService @Inject constructor(
 
     suspend fun initializePredefinedRecipes(): Result<Unit> {
         return try {
-            // Check if predefined recipes already exist
+            // Get all existing predefined recipes
             val existingPredefinedRecipes = recipesCollection
                 .whereEqualTo("userId", "predefined")
-                .limit(1)
                 .get()
                 .await()
             
-            // If predefined recipes already exist, don't add them again
-            if (!existingPredefinedRecipes.isEmpty) {
-                return Result.success(Unit)
-            }
+            // Create a set of existing recipe names for quick lookup
+            val existingRecipeNames = existingPredefinedRecipes.documents
+                .mapNotNull { doc -> doc.getString("name") }
+                .toSet()
             
-            // Add each predefined recipe to Firestore
+            // Add only the recipes that don't exist yet
             var successCount = 0
             for (recipe in predefinedRecipes) {
-                try {
-                    recipesCollection.add(recipe).await()
-                    successCount++
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error adding recipe ${recipe.name}: ${e.message}", e)
+                if (!existingRecipeNames.contains(recipe.name)) {
+                    try {
+                        // Create a new document with the recipe name as the ID
+                        val docRef = recipesCollection.document(recipe.name.lowercase().replace(" ", "_"))
+                        docRef.set(recipe).await()
+                        successCount++
+                        Log.d(TAG, "Added recipe: ${recipe.name}")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error adding recipe ${recipe.name}: ${e.message}", e)
+                    }
                 }
             }
             
             if (successCount > 0) {
+                Log.d(TAG, "Successfully added $successCount new predefined recipes")
                 Result.success(Unit)
             } else {
-                Result.failure(Exception("Failed to add any predefined recipes"))
+                Log.d(TAG, "All predefined recipes already exist")
+                Result.success(Unit)
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error initializing predefined recipes", e)

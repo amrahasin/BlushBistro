@@ -205,7 +205,15 @@ fun ForgotPasswordScreen(
                                         return@launch
                                     }
                                     
+                                    // Validate email format
+                                    if (!android.util.Patterns.EMAIL_ADDRESS.matcher(email).matches()) {
+                                        errorMessage = "Please enter a valid email address"
+                                        return@launch
+                                    }
+                                    
                                     val authService = FirebaseAuthService.getInstance(context)
+                                    
+                                    // Proceed with password reset
                                     val resetResult = authService.resetPassword(email)
                                     
                                     resetResult.fold(
